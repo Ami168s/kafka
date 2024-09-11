@@ -71,11 +71,12 @@ class KafkaScheduler(val threads: Int,
   private var executor: ScheduledThreadPoolExecutor = null
   private val schedulerThreadId = new AtomicInteger(0)
 
-  override def startup() {
+  override def startup = {
     debug("Initializing task scheduler.")
     this synchronized {
-      if(isStarted)
+      if(isStarted) {
         throw new IllegalStateException("This scheduler has already been started!")
+      }
       executor = new ScheduledThreadPoolExecutor(threads)
       executor.setContinueExistingPeriodicTasksAfterShutdownPolicy(false)
       executor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false)

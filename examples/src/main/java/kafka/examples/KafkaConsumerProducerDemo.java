@@ -24,6 +24,5 @@ public class KafkaConsumerProducerDemo {
 
         Consumer consumerThread = new Consumer(KafkaProperties.TOPIC);
         consumerThread.start();
-
     }
 }

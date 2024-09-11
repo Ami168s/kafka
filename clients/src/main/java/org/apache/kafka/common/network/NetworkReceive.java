@@ -83,6 +83,7 @@ public class NetworkReceive implements Receive {
                 throw new EOFException();
             read += bytesRead;
             if (!size.hasRemaining()) {
+                // NOTE_AMI: 重置ByteBuffer的position=0&mark=-1
                 size.rewind();
                 int receiveSize = size.getInt();
                 if (receiveSize < 0)

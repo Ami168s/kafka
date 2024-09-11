@@ -53,10 +53,12 @@ public class ByteBufferSend implements Send {
 
     @Override
     public long writeTo(GatheringByteChannel channel) throws IOException {
+        // NOTE_AMI: 将clientRequest发送给Server端
         long written = channel.write(buffers);
         if (written < 0)
             throw new EOFException("Wrote negative bytes to channel. This shouldn't happen.");
         remaining -= written;
+        // NOTE_AMI: 如果是PlainText传输层，则永远不会pending，即pending=false。
         pending = TransportLayers.hasPendingWrites(channel);
         return written;
     }

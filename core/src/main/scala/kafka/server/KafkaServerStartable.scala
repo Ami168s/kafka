@@ -34,7 +34,7 @@ class KafkaServerStartable(val serverConfig: KafkaConfig, reporters: Seq[KafkaMe
 
   def this(serverConfig: KafkaConfig) = this(serverConfig, Seq.empty)
 
-  def startup() {
+  def startup = {
     try {
       server.startup()
     }

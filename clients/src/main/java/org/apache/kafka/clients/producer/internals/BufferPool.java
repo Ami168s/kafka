@@ -100,19 +100,23 @@ public final class BufferPool {
         try {
             // check if we have a free buffer of the right size pooled
             if (size == poolableSize && !this.free.isEmpty())
+                // NOTE_AMI: 如果free中有符合条件的ByteBuffer，直接返回一个。
                 return this.free.pollFirst();
 
             // now check if the request is immediately satisfiable with the
             // memory on hand or if we need to block
             int freeListSize = this.free.size() * this.poolableSize;
             if (this.availableMemory + freeListSize >= size) {
+                // NOTE_AMI: 说明当前未使用的内存满足请求的需求。
                 // we have enough unallocated or pooled memory to immediately
                 // satisfy the request
+                // NOTE_AMI: 如果this.availableMemory < size，说明需要从free中释放一些ByteBuffer，以满足内存需求。
                 freeUp(size);
                 this.availableMemory -= size;
                 lock.unlock();
                 return ByteBuffer.allocate(size);
             } else {
+                // NOTE_AMI: 当前未使用的内存不足以满足请求的需求。
                 // we are out of memory and will have to block
                 int accumulated = 0;
                 ByteBuffer buffer = null;
@@ -121,13 +125,16 @@ public final class BufferPool {
                 this.waiters.addLast(moreMemory);
                 // loop over and over until we have a buffer or have reserved
                 // enough memory to allocate one
+                // NOTE_AMI: 循环等待，直至有足够的内存分配。
                 while (accumulated < size) {
                     long startWaitNs = time.nanoseconds();
                     long timeNs;
                     boolean waitingTimeElapsed;
                     try {
+                        // NOTE_AMI: 在规定的remainingTimeToBlockNs等待被唤醒去分配这个的内存请求需求。
                         waitingTimeElapsed = !moreMemory.await(remainingTimeToBlockNs, TimeUnit.NANOSECONDS);
                     } catch (InterruptedException e) {
+                        // NOTE_AMI: 被唤醒，移除当前 moreMemory Conditoin。
                         this.waiters.remove(moreMemory);
                         throw e;
                     } finally {
@@ -137,6 +144,7 @@ public final class BufferPool {
                     }
 
                     if (waitingTimeElapsed) {
+                        // NOTE_AMI: 一直等待，没有被唤醒，直至超时，抛出超时异常。
                         this.waiters.remove(moreMemory);
                         throw new TimeoutException("Failed to allocate memory within the configured max blocking time " + maxTimeToBlockMs + " ms.");
                     }
@@ -166,6 +174,7 @@ public final class BufferPool {
 
                 // signal any additional waiters if there is more memory left
                 // over for them
+                // NOTE_AMI: 如果还有剩余的内存，通知其他线程。还挺好！！！！
                 if (this.availableMemory > 0 || !this.free.isEmpty()) {
                     if (!this.waiters.isEmpty())
                         this.waiters.peekFirst().signal();
@@ -174,8 +183,10 @@ public final class BufferPool {
                 // unlock and return the buffer
                 lock.unlock();
                 if (buffer == null)
+                    // NOTE_AMI: size != batch.size
                     return ByteBuffer.allocate(size);
                 else
+                    // NOTE_AMI: size == batch.size
                     return buffer;
             }
         } finally {
@@ -205,11 +216,14 @@ public final class BufferPool {
         lock.lock();
         try {
             if (size == this.poolableSize && size == buffer.capacity()) {
+                // NOTE_AMI: 将缓存的ByteBuffer清空放入free队列中，供后续使用。避免频繁GC。
                 buffer.clear();
                 this.free.add(buffer);
             } else {
+                // NOTE_AMI: 通过GC回收内存，这里不需要额外处理
                 this.availableMemory += size;
             }
+            // NOTE_AMI: 由于写快于发送，会造成等待。这里需要通知等待的线程。
             Condition moreMem = this.waiters.peekFirst();
             if (moreMem != null)
                 moreMem.signal();

@@ -222,6 +222,10 @@ public class Sender implements Runnable {
         // otherwise if some partition already has some data accumulated but not ready yet,
         // the select time will be the time difference between now and its linger expiry time;
         // otherwise the select time will be the time difference between now and the metadata expiry time;
+        // NOTE_AMI: NetworkClient#poll方法主要做了以下几件事：
+        //  1. metadata 更新
+        //  2. 通过selector处理连接，读，写，需要注意的是，在将Sends发送给对应的node之后，需要移除OP_WRITE
+        //  3. 处理各种responses，并触发callback。
         this.client.poll(pollTimeout, now);
     }
 
@@ -267,6 +271,7 @@ public class Sender implements Runnable {
                     TopicPartition tp = entry.getKey();
                     ProduceResponse.PartitionResponse partResp = entry.getValue();
                     RecordBatch batch = batches.get(tp);
+                    // NOTE_AMI: 完成当前RecordBatch发送请求通知。
                     completeBatch(batch, partResp, correlationId, now);
                 }
                 this.sensors.recordLatency(response.destination(), response.requestLatencyMs());
@@ -293,6 +298,7 @@ public class Sender implements Runnable {
         Errors error = response.error;
         if (error != Errors.NONE && canRetry(batch, error)) {
             // retry
+            // NOTE_AMI: 重试策略。
             log.warn("Got error produce response with correlation id {} on topic-partition {}, retrying ({} attempts left). Error: {}",
                      correlationId,
                      batch.topicPartition,
@@ -307,6 +313,7 @@ public class Sender implements Runnable {
             else
                 exception = error.exception();
             // tell the user the result of their request
+            // NOTE_AMI: 将消息发送结果通过其send时配置的callback告知给用户。
             batch.done(response.baseOffset, response.logAppendTime, exception);
             this.accumulator.deallocate(batch);
             if (error != Errors.NONE)
@@ -354,6 +361,7 @@ public class Sender implements Runnable {
         ProduceRequest.Builder requestBuilder =
                 new ProduceRequest.Builder(acks, timeout, produceRecordsByPartition);
         RequestCompletionHandler callback = new RequestCompletionHandler() {
+            // NOTE_AMI: 这个callback会是reponses调用。
             public void onComplete(ClientResponse response) {
                 handleProduceResponse(response, recordsByPartition, time.milliseconds());
             }

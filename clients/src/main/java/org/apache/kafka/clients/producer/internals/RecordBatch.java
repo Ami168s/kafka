@@ -103,7 +103,8 @@ public final class RecordBatch {
         // Set the future before invoking the callbacks as we rely on its state for the `onCompletion` call
         produceFuture.set(baseOffset, logAppendTime, exception);
 
-        // execute callbacks
+        // execute callbacks+
+        // NOTE_AMI: 调用Producer异步send时配置的callback。
         for (Thunk thunk : thunks) {
             try {
                 if (exception == null) {

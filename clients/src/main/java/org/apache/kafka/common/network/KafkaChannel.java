@@ -137,6 +137,7 @@ public class KafkaChannel {
         if (this.send != null)
             throw new IllegalStateException("Attempt to begin a send operation with prior send operation still in progress.");
         this.send = send;
+        // NOTE_AMI: 将当前包装后的send对象交给KafkaChannel，并在其SelectionKey上添加OP_WRITE事件。
         this.transportLayer.addInterestOps(SelectionKey.OP_WRITE);
     }
 
@@ -148,9 +149,12 @@ public class KafkaChannel {
         }
 
         receive(receive);
+        // NOTE_AMI: !size.hasRemaining() && !buffer.hasRemaining()表示当前包接收完毕。
         if (receive.complete()) {
+            // NOTE_AMI: 重置buffer的position=0
             receive.payload().rewind();
             result = receive;
+            // NOTE_AMI: 释放对象。
             receive = null;
         }
         return result;
@@ -171,7 +175,9 @@ public class KafkaChannel {
 
     private boolean send(Send send) throws IOException {
         send.writeTo(transportLayer);
+        // NOTE_AMI: PlaintextTransportLayer默认发送完所有buffers数据后，即会完成completed。
         if (send.completed())
+            // NOTE_AMI: 发送完毕，则从SelectionKey上移除OP_WRITE事件。
             transportLayer.removeInterestOps(SelectionKey.OP_WRITE);
 
         return send.completed();

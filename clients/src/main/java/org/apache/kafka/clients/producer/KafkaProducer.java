@@ -216,6 +216,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             clientId = config.getString(ProducerConfig.CLIENT_ID_CONFIG);
             if (clientId.length() <= 0)
                 clientId = "producer-" + PRODUCER_CLIENT_ID_SEQUENCE.getAndIncrement();
+            // NOTE_AMI: metric 初始化
             Map<String, String> metricTags = new LinkedHashMap<String, String>();
             metricTags.put("client-id", clientId);
             MetricConfig metricConfig = new MetricConfig().samples(config.getInt(ProducerConfig.METRICS_NUM_SAMPLES_CONFIG))
@@ -223,10 +224,15 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                     .tags(metricTags);
             List<MetricsReporter> reporters = config.getConfiguredInstances(ProducerConfig.METRIC_REPORTER_CLASSES_CONFIG,
                     MetricsReporter.class);
+            // NOTE_AMI: 为metrics添加必要的JMX MBEAN 前缀，比如kafka.producer。
             reporters.add(new JmxReporter(JMX_PREFIX));
             this.metrics = new Metrics(metricConfig, reporters, time);
+            // NOTE_AMI: 初始化默认的partitioner: org.apache.kafka.clients.producer.internals.DefaultPartitioner
+            // NOTE_AMI: DefaultPartitioner的分区规则：有key，则按照key分区；否则，按照轮询分区。
             this.partitioner = config.getConfiguredInstance(ProducerConfig.PARTITIONER_CLASS_CONFIG, Partitioner.class);
+            // NOTE_AMI: retry.backoff.ms = 100ms
             long retryBackoffMs = config.getLong(ProducerConfig.RETRY_BACKOFF_MS_CONFIG);
+            // NOTE_AMI: key-value serializer初始化。
             if (keySerializer == null) {
                 this.keySerializer = config.getConfiguredInstance(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
                         Serializer.class);
@@ -246,14 +252,19 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
 
             // load interceptors and make sure they get clientId
             userProvidedConfigs.put(ProducerConfig.CLIENT_ID_CONFIG, clientId);
+            // NOTE_AMI: interceptors初始化，默认null。
             List<ProducerInterceptor<K, V>> interceptorList = (List) (new ProducerConfig(userProvidedConfigs, false)).getConfiguredInstances(ProducerConfig.INTERCEPTOR_CLASSES_CONFIG,
                     ProducerInterceptor.class);
             this.interceptors = interceptorList.isEmpty() ? null : new ProducerInterceptors<>(interceptorList);
 
             ClusterResourceListeners clusterResourceListeners = configureClusterResourceListeners(keySerializer, valueSerializer, interceptorList, reporters);
+            // NOTE_AMI: metadata初始化。用于 client 与 sender 线程。
             this.metadata = new Metadata(retryBackoffMs, config.getLong(ProducerConfig.METADATA_MAX_AGE_CONFIG), true, clusterResourceListeners);
+            // NOTE_AMI: max.request.size = 1 * 1024 * 1024
             this.maxRequestSize = config.getInt(ProducerConfig.MAX_REQUEST_SIZE_CONFIG);
+            // NOTE_AMI: buffer.memory = 32MB，RecordAccumulator + CompressionUsedMemory + MemoryUsedMaxFlightRequest ≈≈ TotalMemorySizeByProducer
             this.totalMemorySize = config.getLong(ProducerConfig.BUFFER_MEMORY_CONFIG);
+            // NOTE_AMI: codec 默认为 none。
             this.compressionType = CompressionType.forName(config.getString(ProducerConfig.COMPRESSION_TYPE_CONFIG));
             /* check for user defined settings.
              * If the BLOCK_ON_BUFFER_FULL is set to true,we do not honor METADATA_FETCH_TIMEOUT_CONFIG.
@@ -292,6 +303,8 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                 this.requestTimeoutMs = config.getInt(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG);
             }
 
+            // NOTE_AMI: RecordAccumulator初始化。
+            //   batch.size = 16KB, totalMemorySize = 32MB, compressionType = none, linger.ms = 0, retry.backoff.ms = 100ms
             this.accumulator = new RecordAccumulator(config.getInt(ProducerConfig.BATCH_SIZE_CONFIG),
                     this.totalMemorySize,
                     this.compressionType,
@@ -303,6 +316,11 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             List<InetSocketAddress> addresses = ClientUtils.parseAndValidateAddresses(config.getList(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG));
             this.metadata.update(Cluster.bootstrap(addresses), Collections.<String>emptySet(), time.milliseconds());
             ChannelBuilder channelBuilder = ClientUtils.createChannelBuilder(config.values());
+            // NOTE_AMI: 网络客户端初始化。
+            //  Selector 内部封装了1个 java.nio.channels.Selector，用于监听网络事件。
+            //  max.in.flight.requests.per.connection = 5，每个连接的最大未确认请求数。
+            //  send.buffer.bytes = 128KB，客户端网络发送缓冲区大小。
+            //  receive.buffer.bytes = 32KB，客户端网络接收缓冲区大小。
             NetworkClient client = new NetworkClient(
                     new Selector(config.getLong(ProducerConfig.CONNECTIONS_MAX_IDLE_MS_CONFIG), this.metrics, time, "producer", channelBuilder),
                     this.metadata,
@@ -314,6 +332,9 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                     this.requestTimeoutMs,
                     time,
                     true);
+            // NOTE_AMI: Sender 线程初始化。
+            //  KafkaClient -> NetworkClient，用于网络通信。
+            //  retries = 0，重试次数。
             this.sender = new Sender(client,
                     this.metadata,
                     this.accumulator,
@@ -325,6 +346,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                     Time.SYSTEM,
                     this.requestTimeoutMs);
             String ioThreadName = "kafka-producer-network-thread" + (clientId.length() > 0 ? " | " + clientId : "");
+            // NOTE_AMI: 配置sender线程为守护线程，并启动它!!!
             this.ioThread = new KafkaThread(ioThreadName, this.sender, true);
             this.ioThread.start();
 
@@ -436,6 +458,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
     @Override
     public Future<RecordMetadata> send(ProducerRecord<K, V> record, Callback callback) {
         // intercept the record, which can be potentially modified; this method does not throw exceptions
+        // NOTE_AMI: 如果配置interceptor的话，调用拦截器，修改record。一般不会使用。可能会在其上游或者下游直接处理。
         ProducerRecord<K, V> interceptedRecord = this.interceptors == null ? record : this.interceptors.onSend(record);
         return doSend(interceptedRecord, callback);
     }

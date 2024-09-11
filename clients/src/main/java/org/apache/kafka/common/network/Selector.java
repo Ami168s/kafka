@@ -120,10 +120,12 @@ public class Selector implements Selectable {
                     boolean metricsPerConnection,
                     ChannelBuilder channelBuilder) {
         try {
+            // NOTE_AMI: 开启一个多路复用器 selector。
             this.nioSelector = java.nio.channels.Selector.open();
         } catch (IOException e) {
             throw new KafkaException(e);
         }
+        // maxReceiveSize = -1 表示不限制单次接收的字节数
         this.maxReceiveSize = maxReceiveSize;
         this.time = time;
         this.metricGrpPrefix = metricGrpPrefix;
@@ -140,6 +142,7 @@ public class Selector implements Selectable {
         this.sensors = new SelectorMetrics(metrics);
         this.channelBuilder = channelBuilder;
         this.metricsPerConnection = metricsPerConnection;
+        // NOTE_AMI: connections.max.idle.ms 默认是 9 * 60 * 1000 (9 minutes)
         this.idleExpiryManager = connectionMaxIdleMs < 0 ? null : new IdleExpiryManager(time, connectionMaxIdleMs);
     }
 
@@ -168,12 +171,15 @@ public class Selector implements Selectable {
         SocketChannel socketChannel = SocketChannel.open();
         socketChannel.configureBlocking(false);
         Socket socket = socketChannel.socket();
+
+        // NOTE_AMI: 设置 TCP 连接的一些参数，如 关闭Nagle算法，设置keep-alive，设置发送/接收缓冲区大小 等。
         socket.setKeepAlive(true);
         if (sendBufferSize != Selectable.USE_DEFAULT_BUFFER_SIZE)
             socket.setSendBufferSize(sendBufferSize);
         if (receiveBufferSize != Selectable.USE_DEFAULT_BUFFER_SIZE)
             socket.setReceiveBufferSize(receiveBufferSize);
         socket.setTcpNoDelay(true);
+
         boolean connected;
         try {
             connected = socketChannel.connect(address);
@@ -255,6 +261,7 @@ public class Selector implements Selectable {
         else {
             KafkaChannel channel = channelOrFail(connectionId, false);
             try {
+                // NOTE_AMI: 注册写事件，并将send对象赋值给kafkaChannel。
                 channel.setSend(send);
             } catch (CancelledKeyException e) {
                 this.failedSends.add(connectionId);
@@ -305,6 +312,7 @@ public class Selector implements Selectable {
 
         /* check ready keys */
         long startSelect = time.nanoseconds();
+        // NOTE_AMI: 返回就绪的SelectionKey的数量。
         int readyKeys = select(timeout);
         long endSelect = time.nanoseconds();
         this.sensors.selectTime.record(endSelect - startSelect, time.milliseconds());
@@ -314,6 +322,7 @@ public class Selector implements Selectable {
             pollSelectionKeys(immediatelyConnectedKeys, true, endSelect);
         }
 
+        // NOTE_AMI: 将stagedReceives中的首条数据添加到 List<NetworkReceive> completedReceives。
         addToCompletedReceives();
 
         long endIo = time.nanoseconds();
@@ -327,6 +336,9 @@ public class Selector implements Selectable {
     private void pollSelectionKeys(Iterable<SelectionKey> selectionKeys,
                                    boolean isImmediatelyConnected,
                                    long currentTimeNanos) {
+        // NOTE_AMI: 负责处理SelectionKey的连接，写，读事件，
+        //  写 -> Send
+        //  读 -> NetworkReceive
         Iterator<SelectionKey> iterator = selectionKeys.iterator();
         while (iterator.hasNext()) {
             SelectionKey key = iterator.next();
@@ -363,11 +375,13 @@ public class Selector implements Selectable {
                 if (channel.ready() && key.isReadable() && !hasStagedReceive(channel)) {
                     NetworkReceive networkReceive;
                     while ((networkReceive = channel.read()) != null)
+                        // NOTE_AMI: Map<KafkaChannel, Deque<NetworkReceive>> stagedReceives
                         addToStagedReceives(channel, networkReceive);
                 }
 
                 /* if channel is ready write to any sockets that have space in their buffer and for which we have data */
                 if (channel.ready() && key.isWritable()) {
+                    // NOTE_AMI: 发送Send对应的buffers，并返回已经发送给server的Send。
                     Send send = channel.write();
                     if (send != null) {
                         this.completedSends.add(send);

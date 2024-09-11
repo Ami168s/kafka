@@ -105,8 +105,12 @@ public final class RecordAccumulator {
         this.compression = compression;
         this.lingerMs = lingerMs;
         this.retryBackoffMs = retryBackoffMs;
+        // NOTE_AMI: CopyOnWriteMap implements ConcurrentMap，基于读进行优化，读写分离, 内部维护 volatile Map<K, V> map。
         this.batches = new CopyOnWriteMap<>();
         String metricGrpName = "producer-metrics";
+        // NOTE_AMI: 内存池设计：BufferPool 维护一个 ByteBuffer 数组，每个 ByteBuffer 大小为 batchSize，
+        //  通过 allocate / deallocate 方法分配和释放 ByteBuffer。
+        //  如果 可用内存耗尽或不够，会进行阻塞，直到有足够的可用内存或者超时。
         this.free = new BufferPool(totalSize, batchSize, metrics, time, metricGrpName);
         this.incomplete = new IncompleteRecordBatches();
         this.muted = new HashSet<>();
@@ -310,6 +314,7 @@ public final class RecordAccumulator {
         long nextReadyCheckDelayMs = Long.MAX_VALUE;
         Set<String> unknownLeaderTopics = new HashSet<>();
 
+        // NOTE_AMI: 是否有请求正在等待内存分配，如果有，说明内存已经耗尽。
         boolean exhausted = this.free.queued() > 0;
         for (Map.Entry<TopicPartition, Deque<RecordBatch>> entry : this.batches.entrySet()) {
             TopicPartition part = entry.getKey();
