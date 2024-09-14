@@ -475,6 +475,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             Cluster cluster = clusterAndWaitTime.cluster;
             byte[] serializedKey;
             try {
+                // NOTE_AMI: 将各种key转换为bytes。
                 serializedKey = keySerializer.serialize(record.topic(), record.key());
             } catch (ClassCastException cce) {
                 throw new SerializationException("Can't convert key of class " + record.key().getClass().getName() +
@@ -490,6 +491,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                         " specified in value.serializer");
             }
 
+            // NOTE_AMI: 通过DefaultPartitioner计算对应record的分区。
             int partition = partition(record, serializedKey, serializedValue, cluster);
             int serializedSize = Records.LOG_OVERHEAD + Record.recordSize(serializedKey, serializedValue);
             ensureValidRecordSize(serializedSize);
@@ -498,16 +500,19 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             log.trace("Sending record {} with callback {} to topic {} partition {}", record, callback, record.topic(), partition);
             // producer callback will make sure to call both 'callback' and interceptor callback
             Callback interceptCallback = this.interceptors == null ? callback : new InterceptorCallback<>(callback, this.interceptors, tp);
+            // NOTE_AMI: 向RecordAccumulator中添加在当前tp对应的Deque中添加record到对应的RecordBatch中。
             RecordAccumulator.RecordAppendResult result = accumulator.append(tp, timestamp, serializedKey, serializedValue, interceptCallback, remainingWaitMs);
             if (result.batchIsFull || result.newBatchCreated) {
                 log.trace("Waking up the sender since topic {} partition {} is either full or getting a new batch", record.topic(), partition);
                 this.sender.wakeup();
             }
+            // NOTE_AMI: 返回 FutureRecordMetadata
             return result.future;
             // handling exceptions and record the errors;
             // for API exceptions return them in the future,
             // for other exceptions throw directly
         } catch (ApiException e) {
+            // NOTE_AMI: 在等待metadata更新时，TimeoutException属于ApiException。
             log.debug("Exception occurred during message send:", e);
             if (callback != null)
                 callback.onCompletion(null, e);
@@ -548,7 +553,9 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      */
     private ClusterAndWaitTime waitOnMetadata(String topic, Integer partition, long maxWaitMs) throws InterruptedException {
         // add topic to metadata topic list if it is not there already and reset expiry
+        // NOTE_AMI: 添加topic到metadata中， 并在下次metadata更新时，更新这个topic的expiry time，如果设置的话。
         metadata.add(topic);
+        // NOTE_AMI: 这里由于Sender线程是在KafkaProducer的构造函数中启动的，所以metadata更新可能是已经完成的。
         Cluster cluster = metadata.fetch();
         Integer partitionsCount = cluster.partitionCountForTopic(topic);
         // Return cached metadata if we have it, and if the record's partition is either undefined
@@ -556,6 +563,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         if (partitionsCount != null && (partition == null || partition < partitionsCount))
             return new ClusterAndWaitTime(cluster, 0);
 
+        // NOTE_AMI: 如果cluster没有对应topic的metadata
         long begin = time.milliseconds();
         long remainingWaitMs = maxWaitMs;
         long elapsed;
@@ -563,16 +571,21 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         // In case we already have cached metadata for the topic, but the requested partition is greater
         // than expected, issue an update request only once. This is necessary in case the metadata
         // is stale and the number of partitions for this topic has increased in the meantime.
+        // NOTE_AMI: 阻塞：等待对应topic的metadata更新或者直到超时maxBlockTimeMs。
         do {
             log.trace("Requesting metadata update for topic {}.", topic);
+            // NOTE_AMI: 请求更新这个topic。
             int version = metadata.requestUpdate();
+            // NOTE_AMI: 唤醒java.nio.channels.Selector，让Selector触发写事件，将InternalMetadataRequest发送出去。
             sender.wakeup();
             try {
+                // NOTE_AMI: 阻塞等待metadata更新，主要是通过version去while循环。
                 metadata.awaitUpdate(version, remainingWaitMs);
             } catch (TimeoutException ex) {
                 // Rethrow with original maxWaitMs to prevent logging exception with remainingWaitMs
                 throw new TimeoutException("Failed to update metadata after " + maxWaitMs + " ms.");
             }
+            // NOTE_AMI: 重新拉取metadata更新后的cluster。
             cluster = metadata.fetch();
             elapsed = time.milliseconds() - begin;
             if (elapsed >= maxWaitMs)

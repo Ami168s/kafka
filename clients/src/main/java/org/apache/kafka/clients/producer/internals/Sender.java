@@ -171,6 +171,8 @@ public class Sender implements Runnable {
             // The set of topics with unknown leader contains topics with leader election pending as well as
             // topics which may have expired. Add the topic again to metadata to ensure it is included
             // and request metadata update, since there are messages to send to the topic.
+            // NOTE_AMI: 对应topic，有未知的leader，则需要更新metadata。
+            //  Metadata.needUpdate = true;
             for (String topic : result.unknownLeaderTopics)
                 this.metadata.add(topic);
             this.metadata.requestUpdate();
@@ -181,6 +183,7 @@ public class Sender implements Runnable {
         long notReadyTimeout = Long.MAX_VALUE;
         while (iter.hasNext()) {
             Node node = iter.next();
+            // NOTE_AMI: 如果当前节点处于就绪状态，则可以发送；否则，考虑重新建立连接，然后移除当前节点，下次再发送。
             if (!this.client.ready(node, now)) {
                 iter.remove();
                 notReadyTimeout = Math.min(notReadyTimeout, this.client.connectionDelay(node, now));
@@ -192,14 +195,17 @@ public class Sender implements Runnable {
                                                                          result.readyNodes,
                                                                          this.maxRequestSize,
                                                                          now);
+        // NOTE_AMI: guaranteeMessageOrder = config.getInt(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION) == 1
         if (guaranteeMessageOrder) {
             // Mute all the partitions drained
+            // NOTE_AMI: 保证消息顺序：mute当前发送的TopicPartition，等收到response完成completeBatch时再unmute这些TopicPartitions.
             for (List<RecordBatch> batchList : batches.values()) {
                 for (RecordBatch batch : batchList)
                     this.accumulator.mutePartition(batch.topicPartition);
             }
         }
 
+        // NOTE_AMI: 获取过期的batches中的expiry RecordBatches，然后做expirationDone，比如callback，timeoutExpection等；最后释放RecordBatches所用内存。
         List<RecordBatch> expiredBatches = this.accumulator.abortExpiredBatches(this.requestTimeout, now);
         // update sensors
         for (RecordBatch expiredBatch : expiredBatches)
@@ -216,6 +222,7 @@ public class Sender implements Runnable {
             log.trace("Nodes with data ready to send: {}", result.readyNodes);
             pollTimeout = 0;
         }
+        // NOTE_AMI: 将batches对应的nodes和recordBatches封装成AbstractRequest -> Send -> InflightRequest，放置到对应的KafkaChannel，并在其对应的
         sendProduceRequests(batches, now);
 
         // if some partitions are already ready to be sent, the select time would be 0;
@@ -327,6 +334,7 @@ public class Sender implements Runnable {
         }
 
         // Unmute the completed partition.
+        // NOTE_AMI: 发送完成(有callback的也已经调用callback)，解除mute状态。
         if (guaranteeMessageOrder)
             this.accumulator.unmutePartition(batch.topicPartition);
     }
@@ -360,6 +368,7 @@ public class Sender implements Runnable {
 
         ProduceRequest.Builder requestBuilder =
                 new ProduceRequest.Builder(acks, timeout, produceRecordsByPartition);
+        // NOTE_AMI: Kafka Producer中主要有2个callback：①发送Callback; ②请求Callback。
         RequestCompletionHandler callback = new RequestCompletionHandler() {
             // NOTE_AMI: 这个callback会是reponses调用。
             public void onComplete(ClientResponse response) {
@@ -369,6 +378,8 @@ public class Sender implements Runnable {
 
         String nodeId = Integer.toString(destination);
         ClientRequest clientRequest = client.newClientRequest(nodeId, requestBuilder, now, acks != 0, callback);
+        // NOTE_AMI: 这里并没有真正的发送出去，而是将请求转换为Send，并注册OP_WRITE。
+        //  然后等Selector事件循环到isWritable时，再发送出去。
         client.send(clientRequest, now);
         log.trace("Sent produce request to {}: {}", nodeId, requestBuilder);
     }

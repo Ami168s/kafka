@@ -179,10 +179,13 @@ public class NetworkClient implements KafkaClient {
             throw new IllegalArgumentException("Cannot connect to empty node " + node);
 
         if (isReady(node, now))
+            // NOTE_AMI: !metadataUpdater.isUpdateDue(now) && canSendRequest(node.idString());
+            //  就绪状态
             return true;
 
         if (connectionStates.canConnect(node.idString(), now))
             // if we are interested in sending to a node and we don't have a connection to it, initiate one
+            // NOTE_AMI: 建立连接。
             initiateConnect(node, now);
 
         return false;

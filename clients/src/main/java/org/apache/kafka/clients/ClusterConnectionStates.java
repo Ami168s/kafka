@@ -36,6 +36,9 @@ final class ClusterConnectionStates {
      * @return true if we can initiate a new connection
      */
     public boolean canConnect(String id, long now) {
+        // NOTE_AMI: 当前节点node可以连接，需要满足以下任一条件：
+        //  1.当前节点没有连接过
+        //  2.当前节点是断开状态，并且已经满足重连的backoff时间
         NodeConnectionState state = nodeState.get(id);
         if (state == null)
             return true;

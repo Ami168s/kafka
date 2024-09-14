@@ -80,6 +80,7 @@ public final class RecordBatch {
                                                                    key == null ? -1 : key.length,
                                                                    value == null ? -1 : value.length);
             if (callback != null)
+                // NOTE_AMI:  List<RecordBatch. Thunk> thunks为callback携带metadata做准备。
                 thunks.add(new Thunk(callback, future));
             this.recordCount++;
             return future;

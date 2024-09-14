@@ -198,6 +198,7 @@ public class Selector implements Selectable {
             try {
                 socketChannel.close();
             } finally {
+                // NOTE_AMI: 如果KafkaChannel构建失败的话，需要将SelectionKey取消注册。
                 key.cancel();
             }
             throw new IOException("Channel could not be created for socket " + socketChannel, e);
@@ -209,6 +210,7 @@ public class Selector implements Selectable {
             // OP_CONNECT won't trigger for immediately connected channels
             log.debug("Immediately connected to node {}", channel.id());
             immediatelyConnectedKeys.add(key);
+            // NOTE_AMI: 连接成功后，则当前SocketChannel就不必再关注OP_CONNNECT事件了!
             key.interestOps(0);
         }
     }
@@ -259,6 +261,7 @@ public class Selector implements Selectable {
         if (closingChannels.containsKey(connectionId))
             this.failedSends.add(connectionId);
         else {
+            // NOTE_AMI: 获取node对应的channel，保证每个node发送一批Records，包括其所有的leader partitions recordBatches。
             KafkaChannel channel = channelOrFail(connectionId, false);
             try {
                 // NOTE_AMI: 注册写事件，并将send对象赋值给kafkaChannel。
@@ -312,7 +315,14 @@ public class Selector implements Selectable {
 
         /* check ready keys */
         long startSelect = time.nanoseconds();
-        // NOTE_AMI: 返回就绪的SelectionKey的数量。
+        // NOTE_AMI: 返回就绪的SelectionKey的数量（环环相扣）。
+        //  select(timeout)本质上：this.nioSelector.select(ms);
+        //  当RecordAccumulator.RecordAppendResult result = accumulator.append(tp, timestamp, serializedKey, serializedValue, interceptCallback, remainingWaitMs);
+        //       if (result.batchIsFull || result.newBatchCreated) {
+        //           log.trace("Waking up the sender since topic {} partition {} is either full or getting a new batch", record.topic(), partition);
+        //           this.sender.wakeup();
+        //       }
+        //  this.sender.wakeup();方法会唤醒nioSelector，让其select()不再阻塞。
         int readyKeys = select(timeout);
         long endSelect = time.nanoseconds();
         this.sensors.selectTime.record(endSelect - startSelect, time.milliseconds());

@@ -90,6 +90,7 @@ public final class BufferPool {
      *         forever)
      */
     public ByteBuffer allocate(int size, long maxTimeToBlockMs) throws InterruptedException {
+        // NOTE_AMI: 首先保证record size小于等于totalMemory。
         if (size > this.totalMemory)
             throw new IllegalArgumentException("Attempt to allocate " + size
                                                + " bytes, but there is a hard limit of "
@@ -113,6 +114,7 @@ public final class BufferPool {
                 // NOTE_AMI: 如果this.availableMemory < size，说明需要从free中释放一些ByteBuffer，以满足内存需求。
                 freeUp(size);
                 this.availableMemory -= size;
+                // NOTE_AMI: 这里释放锁太关键了!!!
                 lock.unlock();
                 return ByteBuffer.allocate(size);
             } else {
@@ -153,10 +155,12 @@ public final class BufferPool {
                     // check if we can satisfy this request from the free list,
                     // otherwise allocate memory
                     if (accumulated == 0 && size == this.poolableSize && !this.free.isEmpty()) {
+                        // NOTE_AMI: 从BufferPool内存池中取出一个ByteBuffer，直接返回。
                         // just grab a buffer from the free list
                         buffer = this.free.pollFirst();
                         accumulated = size;
                     } else {
+                        // NOTE_AMI: 直接从GC释放的内存中申请。
                         // we'll need to allocate memory, but we may only get
                         // part of what we need on this iteration
                         freeUp(size - accumulated);
@@ -166,6 +170,7 @@ public final class BufferPool {
                     }
                 }
 
+                // NOTE_AMI: 已经申请到size大小的内存，不管是从BufferPool中还是GC释放，然后移除等待内存的Condition。
                 // remove the condition for this thread to let the next thread
                 // in line start getting memory
                 Condition removed = this.waiters.removeFirst();
@@ -174,7 +179,7 @@ public final class BufferPool {
 
                 // signal any additional waiters if there is more memory left
                 // over for them
-                // NOTE_AMI: 如果还有剩余的内存，通知其他线程。还挺好！！！！
+                // NOTE_AMI: 如果还有剩余的内存，通知后续其他正在等待内存分配的线程。还挺好！！！！
                 if (this.availableMemory > 0 || !this.free.isEmpty()) {
                     if (!this.waiters.isEmpty())
                         this.waiters.peekFirst().signal();

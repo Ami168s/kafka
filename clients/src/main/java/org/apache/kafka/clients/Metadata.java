@@ -151,6 +151,8 @@ public final class Metadata {
         }
         long begin = System.currentTimeMillis();
         long remainingWaitMs = maxWaitMs;
+        // NOTE_AMI: metadata 成功更新后，this.version += 1，阻塞退出，表示metadata更新成功!
+        //  如果是TimeoutException退出的话，表示metadata更新失败。
         while (this.version <= lastVersion) {
             if (remainingWaitMs != 0)
                 wait(remainingWaitMs);
