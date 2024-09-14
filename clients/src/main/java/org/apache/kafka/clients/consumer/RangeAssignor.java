@@ -50,6 +50,7 @@ public class RangeAssignor extends AbstractPartitionAssignor {
         for (Map.Entry<String, List<String>> subscriptionEntry : consumerMetadata.entrySet()) {
             String consumerId = subscriptionEntry.getKey();
             for (String topic : subscriptionEntry.getValue())
+                // NOTE_AMI: 将当前consumer添加到topic中对应的消费列表中。
                 put(res, topic, consumerId);
         }
         return res;
@@ -71,13 +72,26 @@ public class RangeAssignor extends AbstractPartitionAssignor {
             if (numPartitionsForTopic == null)
                 continue;
 
+            // NOTE_AMI: 消费组(看作1个消费者)按照字典序排序。
             Collections.sort(consumersForTopic);
 
+            // NOTE_AMI: 每个消费者分配的分区数。
             int numPartitionsPerConsumer = numPartitionsForTopic / consumersForTopic.size();
+            // NOTE_AMI: 对于当前topic，额外携带1个partition的消费者数。
             int consumersWithExtraPartition = numPartitionsForTopic % consumersForTopic.size();
 
             List<TopicPartition> partitions = AbstractPartitionAssignor.partitions(topic, numPartitionsForTopic);
             for (int i = 0, n = consumersForTopic.size(); i < n; i++) {
+                // NOTE_AMI: 范围分区算法思想：假定 consumersWithExtraPartition = 3, partitionsForTopic = 15, consumersForTopic = 6
+                //  1. i = 0: start = numPartitionsPerConsumer * i + 0; length = numPartitionsPerConsumer + 1 (1 <= consumersWithExtraPartition)
+                //  2. i = 1: start = numPartitionsPerConsumer * i + 1; length = numPartitionsPerConsumer + 1 (2 <= consumersWithExtraPartition)
+                //  3. i = 2: start = numPartitionsPerConsumer * i + 2; length = numPartitionsPerConsumer + 1 (3 <= consumersWithExtraPartition)
+                //  4. i = 3: start = numPartitionsPerConsumer * i + 3; length = numPartitionsPerConsumer + 0 (4 > consumersWithExtraPartition)
+                //  5. i = 4: start = numPartitionsPerConsumer * i + 3; length = numPartitionsPerConsumer + 0 (5 > consumersWithExtraPartition)
+                //  6. i = 5: start = numPartitionsPerConsumer * i + 3; length = numPartitionsPerConsumer + 0 (6 > consumersWithExtraPartition)
+                //   summary formula:
+                //     start = numPartitionsPerConsumer * i + Math.min(i, consumersWithExtraPartition);
+                //     length = numPartitionsPerConsumer + (i + 1 > consumersWithExtraPartition ? 0 : 1);
                 int start = numPartitionsPerConsumer * i + Math.min(i, consumersWithExtraPartition);
                 int length = numPartitionsPerConsumer + (i + 1 > consumersWithExtraPartition ? 0 : 1);
                 assignment.get(consumersForTopic.get(i)).addAll(partitions.subList(start, start + length));
